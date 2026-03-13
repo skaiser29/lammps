@@ -383,6 +383,23 @@ void LAMMPS_NS::update_atom_energy(MLIAPDataKokkosDevice *data, double *ei)
   },*data->energy);
 }
 
+/* ----------------------------------------------------------------------
+   add forces for i indexed local atoms
+   ---------------------------------------------------------------------- */
+
+void LAMMPS_NS::update_atom_forces(MLIAPDataKokkosDevice *data, double *fi)
+{
+  auto *f = data->f;
+  const auto nlocal = data->nlocal;
+
+  Kokkos::parallel_for(nlocal, KOKKOS_LAMBDA(int i) {
+    int i3 = i * 3;
+    Kokkos::atomic_add(&f[i3 + 0], fi[i3 + 0]);
+    Kokkos::atomic_add(&f[i3 + 1], fi[i3 + 1]);
+    Kokkos::atomic_add(&f[i3 + 2], fi[i3 + 2]);
+  });
+}
+
 namespace LAMMPS_NS {
 template class MLIAPDummyModelKokkos<LMPDeviceType>;
 template class MLIAPDummyDescriptorKokkos<LMPDeviceType>;
@@ -396,4 +413,3 @@ template MLIAPBuildUnifiedKokkos_t<LMPHostType> LAMMPS_NS::build_unified(char *u
 #endif
 }
 #endif
-

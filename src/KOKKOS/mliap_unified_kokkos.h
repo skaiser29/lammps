@@ -61,6 +61,7 @@ MLIAPBuildUnifiedKokkos_t<DeviceType> build_unified(char *, MLIAPDataKokkos<Devi
 void update_pair_energy(MLIAPDataKokkosDevice *, double *);
 void update_pair_forces(MLIAPDataKokkosDevice *, double *);
 void update_atom_energy(MLIAPDataKokkosDevice *, double *);
+void update_atom_forces(MLIAPDataKokkosDevice *, double *);
 
 }    // namespace LAMMPS_NS
 

@@ -76,6 +76,11 @@ cdef extern from "mliap_data_kokkos.h" namespace "LAMMPS_NS":
         int * jelems            # element of each neighbor
         int * elems             # element of each atom in or not in the neighborlist
         double * rij           # distance vector of each neighbor
+        double * owned_positions
+        int * owned_tags
+        int * owned_elems
+        double cell[9]
+        int pbc[3]
         # ----- write only -----
         double * graddesc     # descriptor gradient w.r.t. each neighbor
         # -END- write only -END-
@@ -111,6 +116,8 @@ cdef extern from "mliap_unified_kokkos.h" namespace "LAMMPS_NS":
 
     cdef void update_pair_energy(MLIAPDataKokkosDevice *, double *) except +
     cdef void update_pair_forces(MLIAPDataKokkosDevice *, double *) except +
+    cdef void update_atom_energy(MLIAPDataKokkosDevice *, double *) except +
+    cdef void update_atom_forces(MLIAPDataKokkosDevice *, double *) except +
 
 
 LOADED_MODEL = None
@@ -192,6 +199,46 @@ cdef class MLIAPDataPy:
             self.update_pair_forces_cpu(fij)
         else:
             self.update_pair_forces_gpu(fij)
+
+    def update_atom_energy_cpu(self, ei):
+        cdef double[:] ei_arr
+        try:
+            ei_arr = ei
+        except:
+            ei_arr = ei.detach().numpy().astype(np.double)
+        update_atom_energy(self.data, &ei_arr[0])
+    def update_atom_energy_gpu(self, ei):
+        cdef uintptr_t ptr
+        try:
+            ptr = ei.data.ptr
+        except:
+            ptr = ei.data_ptr()
+        update_atom_energy(self.data, <double*>ptr)
+    def update_atom_energy(self, ei):
+        if self.data.dev==0:
+            self.update_atom_energy_cpu(ei)
+        else:
+            self.update_atom_energy_gpu(ei)
+
+    def update_atom_forces_cpu(self, fi):
+        cdef double[:, ::1] fi_arr
+        try:
+            fi_arr = fi
+        except:
+            fi_arr = fi.detach().numpy().astype(np.double)
+        update_atom_forces(self.data, &fi_arr[0][0])
+    def update_atom_forces_gpu(self, fi):
+        cdef uintptr_t ptr
+        try:
+            ptr = fi.data.ptr
+        except:
+            ptr = fi.data_ptr()
+        update_atom_forces(self.data, <double*>ptr)
+    def update_atom_forces(self, fi):
+        if self.data.dev==0:
+            self.update_atom_forces_cpu(fi)
+        else:
+            self.update_atom_forces_gpu(fi)
 
     def forward_exchange(self, copy_from, copy_to, vec_len):
         cdef uintptr_t copy_from_ptr, copy_to_ptr;
@@ -421,6 +468,32 @@ cdef class MLIAPDataPy:
         if self.data.rij is NULL:
             return None
         return create_array(self.data.dev, self.data.rij, [self.npairs,3],False)
+
+    @property
+    def owned_positions(self):
+        if self.data.owned_positions is NULL:
+            return None
+        return np.asarray(<double[:self.nlocal, :3]> self.data.owned_positions)
+
+    @property
+    def owned_tags(self):
+        if self.data.owned_tags is NULL:
+            return None
+        return np.asarray(<int[:self.nlocal]> self.data.owned_tags)
+
+    @property
+    def owned_elems(self):
+        if self.data.owned_elems is NULL:
+            return None
+        return np.asarray(<int[:self.nlocal]> self.data.owned_elems)
+
+    @property
+    def cell(self):
+        return np.asarray(<double[:3, :3]> &self.data.cell[0])
+
+    @property
+    def pbc(self):
+        return np.asarray(<int[:3]> &self.data.pbc[0])
 
     @property
     def rij_max(self):

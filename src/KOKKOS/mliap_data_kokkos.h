@@ -21,6 +21,7 @@
 #include "mliap_data.h"
 
 #include "kokkos_type.h"
+#include "lmptype.h"
 #include "memory_kokkos.h"
 #include "pair_mliap_kokkos.h"
 #include "pointers.h"
@@ -92,6 +93,12 @@ template <class DeviceType> class MLIAPDataKokkos : public MLIAPData {
 
   // Just cached for python interface
   double *f_device;
+  double **owned_positions_host;
+  int *owned_tags_host;
+  int *owned_elems_host;
+  int owned_metadata_max;
+  double cell_matrix[9];
+  int pbc_flags[3];
 
  protected:
   class LAMMPS *lmp;
@@ -138,6 +145,9 @@ public:
     jelems(base.k_jelems.view_device().data()),
     elems(base.k_elems.view_device().data()),
     rij(base.k_rij.view_device().data()),
+    owned_positions(base.owned_positions_host ? &base.owned_positions_host[0][0] : nullptr),
+    owned_tags(base.owned_tags_host),
+    owned_elems(base.owned_elems_host),
     graddesc(base.k_graddesc.view_device().data()),
     eflag(base.eflag),
     vflag(base.vflag),
@@ -147,7 +157,12 @@ public:
 #else
     dev(0)
 #endif
-    {  }
+    {
+      for (int i = 0; i < 9; ++i) cell[i] = 0.0;
+      for (int i = 0; i < 3; ++i) pbc[i] = 0;
+      for (int i = 0; i < 9; ++i) cell[i] = base.cell_matrix[i];
+      for (int i = 0; i < 3; ++i) pbc[i] = base.pbc_flags[i];
+    }
   int size_array_rows;
   int size_array_cols;
   int natoms;
@@ -192,6 +207,11 @@ public:
   int *jelems;
   int *elems;
   double *rij;
+  double *owned_positions;
+  int *owned_tags;
+  int *owned_elems;
+  double cell[9];
+  int pbc[3];
   double *graddesc;
   int eflag;
   int vflag;

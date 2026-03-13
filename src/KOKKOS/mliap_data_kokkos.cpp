@@ -19,6 +19,7 @@
 #include "mliap_data_kokkos.h"
 
 #include "atom_kokkos.h"
+#include "domain.h"
 #include "kokkos_type.h"
 #include "pair_mliap_kokkos.h"
 #include "atom_masks.h"
@@ -37,6 +38,13 @@ MLIAPDataKokkos<DeviceType>::MLIAPDataKokkos(LAMMPS *lmp_in, int gradgradflag_in
     lmp(lmp_in)
 {
   execution_space = ExecutionSpaceFromDevice<DeviceType>::space;
+  f_device = nullptr;
+  owned_positions_host = nullptr;
+  owned_tags_host = nullptr;
+  owned_elems_host = nullptr;
+  owned_metadata_max = 0;
+  for (int i = 0; i < 9; ++i) cell_matrix[i] = 0.0;
+  for (int i = 0; i < 3; ++i) pbc_flags[i] = 0;
 }
 
 /* ---------------------------------------------------------------------- */
@@ -59,6 +67,9 @@ MLIAPDataKokkos<DeviceType>::~MLIAPDataKokkos() {
   memoryKK->destroy_kokkos(k_elems,elems);
   memoryKK->destroy_kokkos(k_rij,rij);
   memoryKK->destroy_kokkos(k_graddesc,graddesc);
+  memory->destroy(owned_positions_host);
+  memory->destroy(owned_tags_host);
+  memory->destroy(owned_elems_host);
 }
 
 /* ---------------------------------------------------------------------- */
@@ -117,9 +128,66 @@ void MLIAPDataKokkos<DeviceType>::generate_neighdata(class NeighList *list_in, i
     }
   }
   atomKK->sync(execution_space,X_MASK | V_MASK | F_MASK | TYPE_MASK);
+  atomKK->sync(Host, X_MASK | TAG_MASK | TYPE_MASK);
   k_pairmliap->x = atomKK->k_x.view<DeviceType>();
   k_pairmliap->v = atomKK->k_v.view<DeviceType>();
   k_pairmliap->f = atomKK->k_f.view<DeviceType>();
+
+  if (atom->nmax > owned_metadata_max) {
+    owned_metadata_max = atom->nmax;
+    memory->destroy(owned_positions_host);
+    memory->create(owned_positions_host, owned_metadata_max, 3, "mliap_data:owned_positions_host");
+    memory->destroy(owned_tags_host);
+    memory->create(owned_tags_host, owned_metadata_max, "mliap_data:owned_tags_host");
+    memory->destroy(owned_elems_host);
+    memory->create(owned_elems_host, owned_metadata_max, "mliap_data:owned_elems_host");
+  }
+
+  auto h_x = atomKK->k_x.view_host();
+  auto h_tag = atomKK->k_tag.view_host();
+  auto h_type = atomKK->k_type.view_host();
+  for (int i = 0; i < nlocal; ++i) {
+    owned_positions_host[i][0] = h_x(i, 0);
+    owned_positions_host[i][1] = h_x(i, 1);
+    owned_positions_host[i][2] = h_x(i, 2);
+    owned_tags_host[i] = static_cast<int>(h_tag(i));
+    owned_elems_host[i] = map[h_type(i)];
+  }
+
+  if (domain->triclinic_general) {
+    cell_matrix[0] = domain->avec[0];
+    cell_matrix[1] = domain->avec[1];
+    cell_matrix[2] = domain->avec[2];
+    cell_matrix[3] = domain->bvec[0];
+    cell_matrix[4] = domain->bvec[1];
+    cell_matrix[5] = domain->bvec[2];
+    cell_matrix[6] = domain->cvec[0];
+    cell_matrix[7] = domain->cvec[1];
+    cell_matrix[8] = domain->cvec[2];
+  } else if (domain->triclinic) {
+    cell_matrix[0] = domain->h[0];
+    cell_matrix[1] = 0.0;
+    cell_matrix[2] = 0.0;
+    cell_matrix[3] = domain->h[5];
+    cell_matrix[4] = domain->h[1];
+    cell_matrix[5] = 0.0;
+    cell_matrix[6] = domain->h[4];
+    cell_matrix[7] = domain->h[3];
+    cell_matrix[8] = domain->h[2];
+  } else {
+    cell_matrix[0] = domain->prd[0];
+    cell_matrix[1] = 0.0;
+    cell_matrix[2] = 0.0;
+    cell_matrix[3] = 0.0;
+    cell_matrix[4] = domain->prd[1];
+    cell_matrix[5] = 0.0;
+    cell_matrix[6] = 0.0;
+    cell_matrix[7] = 0.0;
+    cell_matrix[8] = domain->prd[2];
+  }
+  pbc_flags[0] = domain->xperiodic;
+  pbc_flags[1] = domain->yperiodic;
+  pbc_flags[2] = domain->zperiodic;
 
   grow_neigharrays();
 
