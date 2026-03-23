@@ -118,6 +118,7 @@ cdef extern from "mliap_unified_kokkos.h" namespace "LAMMPS_NS":
     cdef void update_pair_forces(MLIAPDataKokkosDevice *, double *) except +
     cdef void update_atom_energy(MLIAPDataKokkosDevice *, double *) except +
     cdef void update_atom_forces(MLIAPDataKokkosDevice *, double *) except +
+    cdef void update_global_virial(MLIAPDataKokkosDevice *, double *) except +
 
 
 LOADED_MODEL = None
@@ -239,6 +240,13 @@ cdef class MLIAPDataPy:
             self.update_atom_forces_cpu(fi)
         else:
             self.update_atom_forces_gpu(fi)
+
+    def update_global_virial(self, vi):
+        vi_arr = np.asarray(vi, dtype=np.double).reshape(-1)
+        if vi_arr.shape[0] != 6:
+            raise ValueError(f"Expected 6 virial components, got shape {vi_arr.shape}")
+        cdef double[:] vi_view = vi_arr
+        update_global_virial(self.data, &vi_view[0])
 
     def forward_exchange(self, copy_from, copy_to, vec_len):
         cdef uintptr_t copy_from_ptr, copy_to_ptr;

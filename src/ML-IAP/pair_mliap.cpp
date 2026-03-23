@@ -53,6 +53,8 @@ PairMLIAP::PairMLIAP(LAMMPS *lmp) :
   restartinfo = 0;
   one_coeff = 1;
   manybody_flag = 1;
+  // ML-IAP paths can tally an explicit virial and should not fall back to F·r.
+  no_virial_fdotr_compute = 1;
   is_child = false;
   centroidstressflag = CENTROID_NOTAVAIL;
 }
@@ -383,4 +385,3 @@ double PairMLIAP::memory_usage()
 
   return bytes;
 }
-

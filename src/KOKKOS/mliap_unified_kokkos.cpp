@@ -400,6 +400,18 @@ void LAMMPS_NS::update_atom_forces(MLIAPDataKokkosDevice *data, double *fi)
   });
 }
 
+/* ----------------------------------------------------------------------
+   add an explicit global virial tensor from an atom-indexed model
+   ---------------------------------------------------------------------- */
+
+void LAMMPS_NS::update_global_virial(MLIAPDataKokkosDevice *data, double *virial)
+{
+  if (!data->vflag || !data->pairmliap->vflag_global) return;
+  for (int i = 0; i < 6; ++i) {
+    data->pairmliap->virial[i] += virial[i];
+  }
+}
+
 namespace LAMMPS_NS {
 template class MLIAPDummyModelKokkos<LMPDeviceType>;
 template class MLIAPDummyDescriptorKokkos<LMPDeviceType>;
