@@ -29,6 +29,11 @@
 #include "neighbor.h"
 #include "update.h"
 
+#ifdef LMP_KOKKOS
+#include "atom_kokkos.h"
+#include "atom_masks.h"
+#endif
+
 #include <cstring>
 
 using namespace LAMMPS_NS;
@@ -371,24 +376,79 @@ void FixIPI::initial_integrate(int /*vflag*/)
     }
   }
 
+#ifdef LMP_KOKKOS
+  // The coordinate assignment above uses legacy host pointers.  Publish it
+  // before DomainKokkos transforms or wraps coordinates on the device.
+  if (lmp->kokkos) ((AtomKokkos *) atom)->modified(Host, X_MASK);
+#endif
+
   // ensure atoms are in current box & update box via shrink-wrap
   // has to be be done before invoking Irregular::migrate_atoms()
   //   since it requires atoms be inside simulation box
 
-  // folds atomic coordinates close to the origin
-  if (domain->triclinic) domain->x2lamda(atom->nlocal);
-  domain->pbc();
+  // i-PI may send arbitrary unwrapped snapshots, including coordinates more
+  // than one box length outside the primary cell.  pbc() only applies one
+  // periodic shift, while remap_all() wraps each coordinate until it is in the
+  // box.  This is a legacy host operation, consistent with the assignment
+  // above and the Irregular migration below.
+  domain->remap_all();
+  if (domain->triclinic) domain->Domain::x2lamda(atom->nlocal);
+#ifdef LMP_KOKKOS
+  if (lmp->kokkos) ((AtomKokkos *) atom)->modified(Host, X_MASK | IMAGE_MASK);
+#endif
   domain->reset_box();
-  // move atoms to new processors via irregular()
-  // only needed if migrate_check() says an atom moves to far
-  if (irregular->migrate_check()) irregular->migrate_atoms();
-  if (domain->triclinic) domain->lamda2x(atom->nlocal);
+
+  // Externally supplied snapshots can move atoms across even an adjacent
+  // processor boundary.  Migrate them here instead of relying on the later
+  // nearest-neighbor exchange, which assumes coordinates came from a normal
+  // integration step and can lose such atoms before the force calculation.
+  int migrate_local = (comm->layout == Comm::LAYOUT_TILED);
+  double *sublo = domain->triclinic ? domain->sublo_lamda : domain->sublo;
+  double *subhi = domain->triclinic ? domain->subhi_lamda : domain->subhi;
+  x = atom->x;
+  for (int i = 0; i < atom->nlocal && !migrate_local; i++)
+    if (x[i][0] < sublo[0] || x[i][0] >= subhi[0] || x[i][1] < sublo[1] ||
+        x[i][1] >= subhi[1] || x[i][2] < sublo[2] || x[i][2] >= subhi[2])
+      migrate_local = 1;
+  int migrated;
+  MPI_Allreduce(&migrate_local, &migrated, 1, MPI_INT, MPI_MAX, world);
+  if (migrated) {
+    irregular->migrate_atoms();
+#ifdef LMP_KOKKOS
+    // Irregular migration is a legacy host operation and can reorder every
+    // per-atom field.  Publish the complete migrated records before the
+    // Kokkos Verlet path performs exchange, borders, or neighbor construction.
+    if (lmp->kokkos) {
+      auto *atomKK = (AtomKokkos *) atom;
+      atomKK->modified(Host, ALL_MASK);
+      atomKK->sync(Device, ALL_MASK);
+    }
+#endif
+  }
+  if (domain->triclinic) {
+#ifdef LMP_KOKKOS
+    if (lmp->kokkos) {
+      domain->Domain::lamda2x(atom->nlocal);
+      ((AtomKokkos *) atom)->modified(Host, X_MASK);
+    } else
+#endif
+      domain->lamda2x(atom->nlocal);
+  }
+
+  // Migration can reorder atoms, change nlocal, and reallocate atom arrays.
+  // Refresh all local views before using them again.  The neighbor snapshot is
+  // indexed in the pre-migration atom order, so it cannot be used to select
+  // periodic images after ownership has changed.
+  x = atom->x;
+  mask = atom->mask;
+  nlocal = atom->nlocal;
+  if (igroup == atom->firstgroup) nlocal = atom->nfirst;
 
   // ensures continuity of trajectories relative to the
   // snapshot at neighbor list creation, minimizing the
   // number of neighbor list updates
   auto *xhold = neighbor->get_xhold();
-  if (xhold != nullptr && !firsttime) {
+  if (xhold != nullptr && !firsttime && !migrated) {
     // don't wrap if xhold is not used in the NL, or the
     // first call (because the NL is initialized from the
     // data file that might have nothing to do with the
